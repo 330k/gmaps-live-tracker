@@ -74,6 +74,8 @@ Use this tool only with the sharer's consent and within the limits of applicable
 laws and Google's Terms of Service. You are responsible for how you collect and
 use location data.
 
+Co-Authored-By: Claude Fable 5.2
+
 ## License
 
 MIT
