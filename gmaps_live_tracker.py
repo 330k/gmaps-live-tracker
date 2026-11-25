@@ -25,20 +25,50 @@ RPC_URL = "https://www.google.com/maps/_/MapsWizUi/data/batchexecute?rpcids=Qt4a
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
+TOKEN_RE = re.compile(r"!1s(\d+)!2s([^!?&]+)")
+
+
+def _follow_redirects(url: str, max_hops: int = 10) -> str:
+    """Location ヘッダのリダイレクトをドメインに関係なく辿る。
+    t.co（X/Twitter）→ maps.app.goo.gl → www.google.com/maps のように
+    多段リダイレクトする短縮URLにも対応する。共有トークンが現れた時点で終了。"""
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect)
+
+    def _hop(target, method):
+        req = urllib.request.Request(target, method=method, headers={"User-Agent": UA})
+        try:
+            resp = opener.open(req, timeout=20)
+            return resp.status, resp.headers.get("location")
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get("location")
+        except urllib.error.URLError:
+            return None, None
+
+    current = url
+    for _ in range(max_hops):
+        if TOKEN_RE.search(current):
+            return current
+        status, location = _hop(current, "HEAD")
+        # HEAD がブロックされる(403/405等)/失敗した場合は GET で再試行
+        if location is None and status not in (301, 302, 303, 307, 308):
+            status, location = _hop(current, "GET")
+        if status in (301, 302, 303, 307, 308) and location:
+            current = urllib.parse.urljoin(current, location)
+            continue
+        break
+    return current
+
+
 def resolve_share(url: str):
     """短縮URL/共有URLから user_id と share_token を抽出"""
-    loc = url
-    # maps.app.goo.gl 等の短縮URLは1回リダイレクトされる
-    if "maps.app.goo.gl" in url or "goo.gl" in url:
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *a, **k):
-                return None
-        op = urllib.request.build_opener(NoRedirect)
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
-        try:
-            op.open(req, timeout=20)
-        except urllib.error.HTTPError as e:
-            loc = e.headers.get("location", url)
+    # X(Twitter)の t.co などを経由すると複数回リダイレクトされるため、
+    # ドメインに関係なく Location ヘッダを辿り、共有トークンが現れたら止める。
+    loc = _follow_redirects(url)
     m = re.search(r"!1s(\d+)!2s([^!?&]+)", loc)
     if not m:
         raise ValueError(f"共有トークンを抽出できませんでした。展開先: {loc}")
